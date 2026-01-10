@@ -1,0 +1,1 @@
+This is a good place to store your LabView files so that when you "git add workspace" your LabView files will also be sent to git.  
