@@ -53,5 +53,8 @@
 	<file action="copy" path="../sen36005_CANUsersGuide_R01.pdf" targetDirectory="" />	
 	<file action="copy" path="../CAN_SEN-36005Configuration.docx" targetDirectory="" />	
     <file action="copy" path="../.gitignore" targetDirectory="" />	
+    <file action="copy" path="../.project_rel" targetDirectory="" />
+    <file action="copy" path="../../../../../../../../replace_project.bat" targetDirectory="" />
+    <file action="copy" path="../../../../../../../../replace_project.sh" targetDirectory="" />
   </project>
 </projectSpec>

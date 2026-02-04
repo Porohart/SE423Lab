@@ -40,5 +40,8 @@
     <file action="copy" path="../F28379dSerial.c" targetDirectory="" />	
 	<file action="copy" path="../song.h" targetDirectory="" />
     <file action="copy" path="../.gitignore" targetDirectory="" />	
+    <file action="copy" path="../.project_rel" targetDirectory="" />
+    <file action="copy" path="../../../../../../../../replace_project.bat" targetDirectory="" />
+    <file action="copy" path="../../../../../../../../replace_project.sh" targetDirectory="" />
   </project>
 </projectSpec>

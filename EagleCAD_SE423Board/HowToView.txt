@@ -1,0 +1,6 @@
+If you would like to just view the Schematic of this board you can go to
+https://www.altium.com/viewer/   and upload both the .sch and .brd file.  
+
+If you would like to edit these board files you can install eagleCAD 7.7, (ask Dan for install files)
+Or you should be able to import to KiCAD, I have not tried this yet.
+You can also import to Autodesk 3DFusion, I have tried this and works pretty well.  
