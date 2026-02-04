@@ -32,19 +32,29 @@ __interrupt void cpu_timer1_isr(void);
 __interrupt void cpu_timer2_isr(void);
 __interrupt void SWI_isr(void);
 
-
-
-
 // Count variables
 uint32_t numTimer0calls = 0;
 uint32_t numSWIcalls = 0;
 extern uint32_t numRXA;
 uint16_t UARTPrint = 0;
 
+// sj our global vars
+int32_t numTimer2calls = 0;
+int16_t temp = 0;
+int32_t countWhenNotPressed = 0;
+
+// vars for breakpoint exercise
+float x1= 6.0;
+float x2= 2.3;
+float x3= 7.3;
+float x4= 7.1;
+
+// sjew defining new funcs
+void SetLEDsOnOff(int16_t LEDvalue);
+int16_t ReadSwitches(void);
 
 void main(void)
 {
-
     // PLL, WatchDog, enable Peripheral Clocks
     // This example function is found in the F2837xD_SysCtrl.c file.
     InitSysCtrl();
@@ -196,19 +206,18 @@ void main(void)
     // 200MHz CPU Freq,                       Period (in uSeconds)
     ConfigCpuTimer(&CpuTimer0, LAUNCHPAD_CPU_FREQUENCY, 10000);
     ConfigCpuTimer(&CpuTimer1, LAUNCHPAD_CPU_FREQUENCY, 20000);
-    ConfigCpuTimer(&CpuTimer2, LAUNCHPAD_CPU_FREQUENCY, 40000);
+    ConfigCpuTimer(&CpuTimer2, LAUNCHPAD_CPU_FREQUENCY, 1000);
 
     // Enable CpuTimer Interrupt bit TIE
-    CpuTimer0Regs.TCR.all = 0x4000;
-    CpuTimer1Regs.TCR.all = 0x4000;
+    // sjew disabled other interrupts
+//    CpuTimer0Regs.TCR.all = 0x4000;
+//    CpuTimer1Regs.TCR.all = 0x4000;
     CpuTimer2Regs.TCR.all = 0x4000;
 
     init_serialSCIA(&SerialA,115200);
     init_serialSCIB(&SerialB,19200);
 //    init_serialSCIC(&SerialC,115200);
 //    init_serialSCID(&SerialD,115200);
-
-
 
     // Enable CPU int1 which is connected to CPU-Timer 0, CPU int13
     // which is connected to CPU-Timer 1, and CPU int 14, which is connected
@@ -234,18 +243,15 @@ void main(void)
     while(1)
     {
         if (UARTPrint == 1 ) {
-
-
 			// Normally on the Robot Car we only use the below UART_printfLine functions to write to the
 			// on board LCD screen.  This below serial_printf is only used in lab 1 to print to a serial 
 			// terminal over a USB cable like you will for your Homeworks.
-			serial_printf(&SerialA,"Num Timer2:%ld Num SerialRX: %ld\r\n",CpuTimer2.InterruptCount,numRXA);
+			//serial_printf(&SerialA,"Num Timer2:%ld Num SerialRX: %ld\r\n",CpuTimer2.InterruptCount,numRXA);
 			
-
 			//IMPORTANT!! %ld is for an int32_t.  To print an int16_t use %d
-            UART_printfLine(1,"Timer2 Calls %ld",CpuTimer2.InterruptCount);
-			UART_printfLine(2,"T0 %ld,T1 %ld",CpuTimer0.InterruptCount,CpuTimer1.InterruptCount);
-            UARTPrint = 0; // EW SJ: Without setting UARTPrint to 0, this if statement is true every cycle of the while loop
+            UART_printfLine(1,"T2 %ld|3x : %ld", numTimer2calls, numTimer2calls*3);
+			UART_printfLine(2,"switch val %d, %x", temp, temp );
+            UARTPrint = 0;
         }
     }
 }
@@ -282,8 +288,9 @@ __interrupt void cpu_timer0_isr(void)
 //        PieCtrlRegs.PIEIFR12.bit.INTx9 = 1;  // Manually cause the interrupt for the SWI
 //    }
 
-    if ((numTimer0calls%3) == 0) {
-        GpioDataRegs.GPDTOGGLE.bit.GPIO111 = 1;
+    if ((numTimer0calls%5) == 0) {
+		// Blink LaunchPad Red LED
+		GpioDataRegs.GPBTOGGLE.bit.GPIO34 = 1;
     }
 
 
@@ -309,5 +316,110 @@ __interrupt void cpu_timer2_isr(void)
 	if ((CpuTimer2.InterruptCount % 10) == 0) {
 		UARTPrint = 1;
 	}
+
+	// sjew increments count
+	numTimer2calls++;
+
+
+	// sjew update temp with current switch values and write to leds (commented out)
+	temp = ReadSwitches();
+
+	//SetLEDsOnOff(temp);
+
+	// testing endianness
+	//uint32_t temp1 = 0xFF000001;
+	//SetLEDsOnOff(temp1);
+
+	// sjew every 100 calls with 1ms period
+	if (numTimer2calls % 100 == 0){
+	    // sjew Leds count in binary when button 2 and 3 are not pressed
+	    SetLEDsOnOff(countWhenNotPressed);
+
+	    // checking if button 2 and 3 are not both pressed
+	    if (!((temp & 0x6) == 0x6)){
+	        countWhenNotPressed++;
+	    }
+	    UARTPrint = 1;
+	}
+
+	// sjew testing breakpoints
+	x4 = x3 + 2.0;
+	x3 = x4 + 1.3;
+	x1 = 9*x2;
+	x2 = 34*x3;
+
+
 }
 
+
+// sjew sets or clears onboard leds based of lowest 5 bits of the LEDvalue
+void SetLEDsOnOff(int16_t LEDvalue){
+
+    // sj led 1
+    if ((LEDvalue & 0x1) == 0x1) {
+        GpioDataRegs.GPASET.bit.GPIO22 = 1;
+    }
+    else{
+        GpioDataRegs.GPACLEAR.bit.GPIO22 = 1;
+    }
+
+    // sj led 2
+    if ((LEDvalue & 0x2) == 0x2) {
+        GpioDataRegs.GPCSET.bit.GPIO94 = 1;
+    }
+    else{
+        GpioDataRegs.GPCCLEAR.bit.GPIO94 = 1;
+    }
+
+    // sj led 3
+    if ((LEDvalue & 0x4) == 0x4) {
+        GpioDataRegs.GPCSET.bit.GPIO95 = 1;
+    }
+    else{
+        GpioDataRegs.GPCCLEAR.bit.GPIO95 = 1;
+    }
+
+    // sj led 4
+    if ((LEDvalue & 0x8) == 0x8) {
+        GpioDataRegs.GPDSET.bit.GPIO97 = 1;
+    }
+    else{
+        GpioDataRegs.GPDCLEAR.bit.GPIO97 = 1;
+    }
+
+    // sj led 5
+    if ((LEDvalue & 0x10) == 0x10) {
+        GpioDataRegs.GPDSET.bit.GPIO111 = 1;
+    }
+    else{
+        GpioDataRegs.GPDCLEAR.bit.GPIO111 = 1;
+    }
+
+}
+
+// sjew returns bit mask of buttons inputs
+int16_t ReadSwitches(void){
+    uint16_t sw = 0;
+
+    // button 1
+    if ( GpioDataRegs.GPEDAT.bit.GPIO157 == 0) {
+        sw |= 0x1;
+    }
+
+    // button 2
+    if ( GpioDataRegs.GPEDAT.bit.GPIO158 == 0) {
+        sw |= 0x2;
+    }
+
+    // button 3
+    if ( GpioDataRegs.GPEDAT.bit.GPIO159 == 0) {
+        sw |= 0x4;
+    }
+
+    // button 4
+    if ( GpioDataRegs.GPFDAT.bit.GPIO160 == 0) {
+        sw |= 0x8;
+    }
+
+    return sw;
+}
