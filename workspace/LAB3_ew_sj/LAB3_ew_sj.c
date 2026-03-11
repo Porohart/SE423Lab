@@ -36,16 +36,42 @@ __interrupt void SWI_isr(void);
 void setEPWM1A(float controleffort);
 void setEPWM2A(float controleffort);
 
+void init_eQEPs(void);
+float readEncLeft(void);
+float readEncRight(void);
+float readEncWheel(void);
+
 // Count variables
 uint32_t numTimer0calls = 0;
 uint32_t numSWIcalls = 0;
 extern uint32_t numRXA;
 uint16_t UARTPrint = 0;
 
-// sjew: global variables to count up and down in the duty cycles
+
+// sjew: global variables to track velocity, position, effort values
 int pwm_iterator = 1;
 int motor_counting_up = 1;
 float ctrl_effort = 0.0;
+float curr_left_enc= 0;
+float curr_right_enc = 0;
+float curr_p_right = 0;
+float curr_p_left = 0;
+float prev_p_right = 0;
+float prev_p_left = 0;
+float v_left = 0;
+float v_right = 0;
+float curr_knob_enc = 0;
+float left_rpf = 9.83;
+float right_rpf = 9.833;
+float u_left = 0;
+float u_right = 0;
+
+// sjew: friction const
+float visc_pos = 2.3335;
+float static_pos = 1.8655;
+float visc_neg = 2.2755;
+float static_neg = -1.863;
+
 
 
 void main(void)
@@ -212,6 +238,7 @@ void main(void)
     init_serialSCIB(&SerialB,19200);
 //    init_serialSCIC(&SerialC,115200);
 //    init_serialSCID(&SerialD,115200);
+    init_eQEPs();
 
     GPIO_SetupPinMux(22, GPIO_MUX_CPU1, 5);
     GPIO_SetupPinMux(0, GPIO_MUX_CPU1, 1);
@@ -298,8 +325,11 @@ void main(void)
 			//serial_printf(&SerialA,"Num Timer2:%ld Num SerialRX: %ld\r\n",CpuTimer2.InterruptCount,numRXA);
 			
 			//IMPORTANT!! %ld is for an int32_t.  To print an int16_t use %d
-            UART_printfLine(1,"Timer2 Calls %ld",CpuTimer2.InterruptCount);
-			UART_printfLine(2,"T0 %ld,T1 %ld",CpuTimer0.InterruptCount,CpuTimer1.InterruptCount);
+//            UART_printfLine(1,"Timer2 Calls %ld",CpuTimer2.InterruptCount);
+//			UART_printfLine(2,"T0 %ld,T1 %ld",CpuTimer0.InterruptCount,CpuTimer1.InterruptCount);
+            // sjew: print out velocity in fps on top row and knob input on bottom
+            UART_printfLine(1, "L: %.2f, R: %.2f", v_left, v_right);
+            UART_printfLine(2, "Knob: %.3f", curr_knob_enc);
             UARTPrint = 0;
         }
     }
@@ -359,35 +389,72 @@ __interrupt void cpu_timer2_isr(void)
 {
 	// Blink LaunchPad Blue LED
     GpioDataRegs.GPATOGGLE.bit.GPIO31 = 1;
-
-    // sjew: if cmpa is equal to 0 or the entire period, flip the sign of the iteration step
-    if(EPwm12Regs.CMPA.bit.CMPA == 0 || EPwm12Regs.CMPA.bit.CMPA == EPwm12Regs.TBPRD) {
-        pwm_iterator *= -1;
-    }
-    EPwm12Regs.CMPA.bit.CMPA += pwm_iterator; // sjew: increment cmpa by the iteration step (either +1 or -1)
     CpuTimer2.InterruptCount++;
-	
-    // sjew: if motor_counting_up not 0 increment ctrl_effort by 0.005
-    //       and if the resultant ctrl_effort exceeds the limit of 10.0 then set motor_counting_up to 0
-    if(motor_counting_up) {
-        ctrl_effort += 0.005;
-        if(ctrl_effort >= 10.0) {
-            motor_counting_up = 0;
-        }
-    // sjew: if motor_counting_up is 0, decrement ctrl_effort by 0.05
-    //       and if the resultant ctrl_effort exceeds the limit of -10.0 then set_motor_counting_up to 1
-    } else {
-        ctrl_effort -= 0.005;
-        if(ctrl_effort <= -10.0) {
-            motor_counting_up = 1;
-        }
+
+    // sjew: CODE FOR LAB 2 WEEK 1 oscillating motor
+    // sjew: if cmpa is equal to 0 or the entire period, flip the sign of the iteration step
+//    if(EPwm12Regs.CMPA.bit.CMPA == 0 || EPwm12Regs.CMPA.bit.CMPA == EPwm12Regs.TBPRD) {
+//        pwm_iterator *= -1;
+//    }
+//    EPwm12Regs.CMPA.bit.CMPA += pwm_iterator; // sjew: increment cmpa by the iteration step (either +1 or -1)
+//
+//    // sjew: if motor_counting_up not 0 increment ctrl_effort by 0.005
+//    //       and if the resultant ctrl_effort exceeds the limit of 10.0 then set motor_counting_up to 0
+//    if(motor_counting_up) {
+//        ctrl_effort += 0.005;
+//        if(ctrl_effort >= 10.0) {
+//            motor_counting_up = 0;
+//        }
+//    // sjew: if motor_counting_up is 0, decrement ctrl_effort by 0.05
+//    //       and if the resultant ctrl_effort exceeds the limit of -10.0 then set_motor_counting_up to 1
+//    } else {
+//        ctrl_effort -= 0.005;
+//        if(ctrl_effort <= -10.0) {
+//            motor_counting_up = 1;
+//        }
+//    }
+//    // sjew: set both motors to the current ctrl_effort
+//    setEPWM1A(ctrl_effort);
+//    setEPWM2A(ctrl_effort);
+    // sjew: store left and right encoder values
+    curr_left_enc = readEncLeft();
+    curr_right_enc = readEncRight();
+    curr_knob_enc = readEncWheel();
+    // sjew: position calculations
+    curr_p_left = curr_left_enc * 1/ left_rpf;
+    curr_p_right = curr_right_enc * 1/right_rpf;
+    // sjew: vel calculations
+    v_left = (curr_p_left - prev_p_left)/0.001;
+    v_right = (curr_p_right - prev_p_right)/0.001;
+//    u_left = curr_knob_enc; // sjew: eventually these will be determined by controls
+//    u_right = curr_knob_enc;
+
+    u_left = 0; // sjew: these are currently set to 0 to test friction comp
+    u_right = 0;
+
+    // friction comp
+    if (v_left > 0.0){
+        u_left = u_left + visc_pos* v_left + static_pos;
+
     }
-    // sjew: set both motors to the current ctrl_effort
-    setEPWM1A(ctrl_effort);
-    setEPWM2A(ctrl_effort);
+    else{
+        u_left = u_left + visc_neg* v_left + static_neg;
+    }
 
+    if (v_right > 0.0){
+        u_right = u_right + visc_pos* v_right + static_pos;
 
-	if ((CpuTimer2.InterruptCount % 10) == 0) {
+    }
+    else{
+        u_right = u_right + visc_neg* v_right + static_neg;
+    }
+    // sjew: set pwm outputs to friction compensated efforts
+    setEPWM1A(u_left);
+    setEPWM2A(u_right);
+    // sjew: store current positions for next interrupt cycle to be used as previous positions
+    prev_p_left = curr_p_left;
+    prev_p_right = curr_p_right;
+	if ((CpuTimer2.InterruptCount % 100) == 0) {
 		UARTPrint = 1;
 	}
 }
@@ -404,6 +471,7 @@ void setEPWM1A(float controleffort) {
 }
 void setEPWM2A(float controleffort) {
     // sjew: set min and max limits for controleffort
+    controleffort *= -1;
     if(controleffort < -10.0)
         controleffort = -10.0;
     if(controleffort > 10.0)
@@ -411,5 +479,93 @@ void setEPWM2A(float controleffort) {
     int16_t offset = EPwm2Regs.TBPRD/2; // sjew: set an offset that would be 50% duty cycle
     float unit_step = EPwm2Regs.TBPRD/20.0; // sjew: unit step of 5% of the total period (each 1.0 in control effort corresponds to 5% of the total period)
     EPwm2Regs.CMPA.bit.CMPA = offset+(unit_step*controleffort); // sjew: cmpa to 50% duty cycle + (5 * controleffort)% <- controleffort ranges from -10 to 10
+}
+
+void init_eQEPs(void) {
+    // setup eQEP1 pins for input
+    EALLOW;
+    //Disable internal pull-up for the selected output pins for reduced power consumption
+    GpioCtrlRegs.GPAPUD.bit.GPIO20 = 1; // Disable pull-up on GPIO20 (EQEP1A)
+    GpioCtrlRegs.GPAPUD.bit.GPIO21 = 1; // Disable pull-up on GPIO21 (EQEP1B)
+    GpioCtrlRegs.GPAQSEL2.bit.GPIO20 = 2; // Qual every 6 samples
+    GpioCtrlRegs.GPAQSEL2.bit.GPIO21 = 2; // Qual every 6 samples
+    EDIS;
+    // This specifies which of the possible GPIO pins will be EQEP1 functional pins.
+    // Comment out other unwanted lines.
+    GPIO_SetupPinMux(20, GPIO_MUX_CPU1, 1);
+    GPIO_SetupPinMux(21, GPIO_MUX_CPU1, 1);
+    EQep1Regs.QEPCTL.bit.QPEN = 0; // make sure eqep in reset
+    EQep1Regs.QDECCTL.bit.QSRC = 0; // Quadrature count mode
+    EQep1Regs.QPOSCTL.all = 0x0; // Disable eQep Position Compare
+    EQep1Regs.QCAPCTL.all = 0x0; // Disable eQep Capture
+    EQep1Regs.QEINT.all = 0x0; // Disable all eQep interrupts
+    EQep1Regs.QPOSMAX = 0xFFFFFFFF; // use full range of the 32 bit count
+    EQep1Regs.QEPCTL.bit.FREE_SOFT = 2; // EQep uneffected by emulation suspend in Code Composer
+    EQep1Regs.QPOSCNT = 0;
+//    SE423 8 Lab #3
+    EQep1Regs.QEPCTL.bit.QPEN = 1; // Enable EQep
+    EALLOW;
+    // setup QEP2 pins for input
+    //Disable internal pull-up for the selected output pinsfor reduced power consumption
+    GpioCtrlRegs.GPBPUD.bit.GPIO54 = 1; // Disable pull-up on GPIO54 (EQEP2A)
+    GpioCtrlRegs.GPBPUD.bit.GPIO55 = 1; // Disable pull-up on GPIO55 (EQEP2B)
+    GpioCtrlRegs.GPBQSEL2.bit.GPIO54 = 2; // Qual every 6 samples
+    GpioCtrlRegs.GPBQSEL2.bit.GPIO55 = 2; // Qual every 6 samples
+    EDIS;
+    GPIO_SetupPinMux(54, GPIO_MUX_CPU1, 5); // set GPIO54 and eQep2A
+    GPIO_SetupPinMux(55, GPIO_MUX_CPU1, 5); // set GPIO55 and eQep2B
+    EQep2Regs.QEPCTL.bit.QPEN = 0; // make sure qep reset
+    EQep2Regs.QDECCTL.bit.QSRC = 0; // Quadrature count mode
+    EQep2Regs.QPOSCTL.all = 0x0; // Disable eQep Position Compare
+    EQep2Regs.QCAPCTL.all = 0x0; // Disable eQep Capture
+    EQep2Regs.QEINT.all = 0x0; // Disable all eQep interrupts
+    EQep2Regs.QPOSMAX = 0xFFFFFFFF; // use full range of the 32 bit count.
+    EQep2Regs.QEPCTL.bit.FREE_SOFT = 2; // EQep uneffected by emulation suspend
+    EQep2Regs.QPOSCNT = 0;
+    EQep2Regs.QEPCTL.bit.QPEN = 1; // Enable EQep
+    EALLOW;
+    // setup QEP3 pins for input
+    //Disable internal pull-up for the selected output pins for reduced power consumption
+    GpioCtrlRegs.GPAPUD.bit.GPIO6 = 1; // Disable pull-up on GPIO54 (EQEP3A)
+    GpioCtrlRegs.GPAPUD.bit.GPIO7 = 1; // Disable pull-up on GPIO55 (EQEP3B)
+    GpioCtrlRegs.GPAQSEL1.bit.GPIO6 = 2; // Qual every 6 samples
+    GpioCtrlRegs.GPAQSEL1.bit.GPIO7 = 2; // Qual every 6 samples
+    EDIS;
+    GPIO_SetupPinMux(6, GPIO_MUX_CPU1, 5); // set GPIO6 and eQep2A
+    GPIO_SetupPinMux(7, GPIO_MUX_CPU1, 5); // set GPIO7 and eQep2B
+    EQep3Regs.QEPCTL.bit.QPEN = 0; // make sure qep reset
+    EQep3Regs.QDECCTL.bit.QSRC = 0; // Quadrature count mode
+    EQep3Regs.QPOSCTL.all = 0x0; // Disable eQep Position Compare
+    EQep3Regs.QCAPCTL.all = 0x0; // Disable eQep Capture
+    EQep3Regs.QEINT.all = 0x0; // Disable all eQep interrupts
+    EQep3Regs.QPOSMAX = 0xFFFFFFFF; // use full range of the 32 bit count.
+    EQep3Regs.QEPCTL.bit.FREE_SOFT = 2; // EQep uneffected by emulation suspend
+    EQep3Regs.QPOSCNT = 0;
+    EQep3Regs.QEPCTL.bit.QPEN = 1; // Enable EQep
+}
+
+float readEncLeft(void) {
+    int32_t raw = 0;
+    uint32_t QEP_maxvalue = 0xFFFFFFFFU; //4294967295U
+    raw = EQep1Regs.QPOSCNT;
+    // SE423 9 Lab #3
+    if (raw >= QEP_maxvalue/2) raw -= QEP_maxvalue; // I don't think this is needed and never true
+    return -(raw*(1/2000.0*1/20.0*TWOPI));
+}
+
+float readEncRight(void) {
+    int32_t raw = 0;
+    uint32_t QEP_maxvalue = 0xFFFFFFFFU; //4294967295U -1 32bit signed int
+    raw = EQep2Regs.QPOSCNT;
+    if (raw >= QEP_maxvalue/2) raw -= QEP_maxvalue; // I don't think this is needed and never true
+    return (raw*(1/2000.0*1/20.0*TWOPI)); // sjew: scaling factor of rotations/counts * wheel revs/rotation * radians/revolution
+}
+
+float readEncWheel(void) {
+    int32_t raw = 0;
+    uint32_t QEP_maxvalue = 0xFFFFFFFFU; //4294967295U -1 32bit signed int
+    raw = EQep3Regs.QPOSCNT;
+    if (raw >= QEP_maxvalue/2) raw -= QEP_maxvalue; // I don't think this is needed and never true
+    return (raw*(2*PI/4000.0)); // sjew: scaling factor of rotations/counts * wheel revs/rotation * radians/revolution
 }
 
