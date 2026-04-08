@@ -60,6 +60,7 @@ extern float printLV2;
 
 extern float LADARrightfront;
 extern float LADARfront;
+float LADARrightback = 0.0;
 
 extern LVSendFloats_t DataToLabView;
 extern char LVsenddata[LVNUM_TOFROM_FLOATS*4+2];
@@ -82,6 +83,9 @@ pose ROBOTps = {0,0,0}; //robot position
 pose LADARps = {3.5/12.0,0,1};  // 3.5/12 for front mounting, theta is not used in this current code
 float printLinux1 = 0;
 float printLinux2 = 0;
+
+// sjew: globals for tracking pose
+float prev_avg_speed = 0.0;
 
 // sjew: adc isr variables
 uint32_t ADCC_count = 0;
@@ -110,6 +114,8 @@ float IMU4z_prev = 0.0;
 
 float accum_IMUz = 0.0;
 float accum_IMU4z = 0.0;
+float accum_gyro_z = 0.0;
+float gyro_z_prev = 0.0;
 
 uint8_t zeroing_flag = 0;
 
@@ -180,6 +186,20 @@ uint32_t numTimer0calls = 0;
 uint32_t numSWIcalls = 0;
 extern uint32_t numRXA;
 uint16_t UARTPrint = 0;
+
+// sjew: wall following params
+float ref_right_wall = 1.0;
+float left_turn_Start_threshold = 1.25;
+float left_turn_Stop_threshold = 3;
+float Kp_right_wall = -2.5;
+float Kp_front_wall = -1.5;
+float front_turn_velocity = 0.5;
+float forward_velocity = 1.0;
+float turn_command_saturation = 2;
+int right_wall_follow_state = 2;
+float right_wall_far = 1.5;
+float right_turn_threshold = 3.75;
+
 
 
 void main(void)
@@ -455,8 +475,11 @@ void main(void)
     PieCtrlRegs.PIEIER1.bit.INTx7 = 1;
     // Enable SWI in the PIE: Group 12 interrupt 9
     PieCtrlRegs.PIEIER12.bit.INTx9 = 1;
+    PieCtrlRegs.PIEIER12.bit.INTx10 = 1;
+    PieCtrlRegs.PIEIER12.bit.INTx11 = 1;
     PieCtrlRegs.PIEIER1.bit.INTx3 = 1;
     PieCtrlRegs.PIEIER6.bit.INTx3 = 1;
+
 
     // Enable global Interrupts and higher priority real-time debug events
     EINT;  // Enable Global interrupt INTM
@@ -481,11 +504,11 @@ void main(void)
             //serial_printf(&SerialA,"Num Timer2:%ld Num SerialRX: %ld\r\n",CpuTimer2.InterruptCount,numRXA);
 
             //IMPORTANT!! %ld is for an int32_t.  To print an int16_t use %d
-            UART_printfLine(1, "iz: %.1f, gz: %.1f", IMUz, gyro_z);
-            UART_printfLine(2, "VL: %.1f, VR: %.1f", v_left, v_right);
-//            UART_printfLine(1,"x: %.2f,4x: %.2f", IMUx, IMU4x);
-//            UART_printfLine(2,"z: %.2f,4z: %.2f", IMUz, IMU4z);
-//            UART_printfLine(2, "IMU vals: ")
+//            UART_printfLine(1, "br: %.2f fr: %.2f", LADARrightback, LADARrightfront);
+//            UART_printfLine(2, "L fr: %.3f", right_wall_fo);
+            UART_printfLine(1, "gyro_z heading: %.2f", ROBOTps.theta);
+            UART_printfLine(2, "x: %.2f, y: %.2f", ROBOTps.x, ROBOTps.y);
+//            UART_printfLine(2, "state: %d", right_wall_follow_state);
             UARTPrint = 0;
         }
     }
@@ -765,6 +788,7 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
         IMU_x_offset = sum_x / 2000.0;
         IMU_4x_offset = sum_4x / 2000.0;
         gyro_z_offset = sum_gyroz / 2000.0;
+        gyro_z_prev = gyro_z - gyro_z_offset;
     } else {
         // sjew: integrating for dead reckoning after offsets have been set
         accum_IMU4z = accum_IMU4z + 0.001 * (IMU4z + IMU4z_prev) / 2.0;
@@ -772,6 +796,9 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
         IMUz_prev = IMUz;
         IMU4z_prev = IMU4z;
         gyro_z -= gyro_z_offset;
+        accum_gyro_z = accum_gyro_z + 0.001 * ((gyro_z + gyro_z_prev)* PI/180.0) / 2.0;
+        gyro_z_prev = gyro_z;
+        ROBOTps.theta = accum_gyro_z;
     }
 
     // sjew: control loop
@@ -785,6 +812,54 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
     v_left = (curr_p_left - prev_p_left)/0.001;
     v_right = (curr_p_right - prev_p_right)/0.001;
 
+    float avg_speed = (v_left + v_right) / 2;
+    float pos_diff = (prev_avg_speed + avg_speed) / 2 * 0.001;
+    ROBOTps.x += pos_diff * cosf(ROBOTps.theta);
+    ROBOTps.y += pos_diff * sinf(ROBOTps.theta);
+    prev_avg_speed = avg_speed;
+    switch (right_wall_follow_state) {
+    case 1:
+        //Left Turn
+        turn_command = Kp_front_wall*(14.5 - LADARfront);
+        v_ref = front_turn_velocity;
+        if (LADARfront > left_turn_Stop_threshold) {
+            right_wall_follow_state = 2;
+        }
+        break;
+    case 2:
+        //Right Wall Follow
+        float ladar_in = LADARrightfront;
+        if(LADARfront < left_turn_Start_threshold) {
+            right_wall_follow_state = 1;
+            break;
+        }
+        if(LADARrightfront > right_wall_far) {
+            if(LADARrightback > right_wall_far) {
+                right_wall_follow_state = 3;
+                break;
+            } else {
+                ladar_in = LADARrightback;
+            }
+        }
+        turn_command = Kp_right_wall*(ref_right_wall - ladar_in);
+        v_ref = forward_velocity;
+        break;
+    case 3:
+        turn_command = -Kp_front_wall*(14.5 - LADARfront);
+        v_ref = front_turn_velocity;
+        if (LADARrightfront < right_turn_threshold) {
+            right_wall_follow_state = 2;
+        }
+        break;
+    default:
+        break;
+    }
+
+    if(turn_command > turn_command_saturation)
+        turn_command = turn_command_saturation;
+    if(turn_command < -turn_command_saturation)
+        turn_command = -turn_command_saturation;
+
 
 
 
@@ -794,8 +869,8 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
         u_right = curr_knob_enc;
     } else {
         // sjew: error, accumulation, and velocity values
-        v_ref = 1.0;
-        turn_command = -curr_knob_enc / 20.0;
+//        v_ref = 1.0;
+//        turn_command = -curr_knob_enc / 20.0;
 //        turn_command = 0.0;
 //        v_ref = curr_knob_enc / 20.0;
         e_steer = v_right - v_left + turn_command;
@@ -860,17 +935,18 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
 
     if (newLinuxCommands == 1) {
         newLinuxCommands = 0;
-        printLinux1 = LinuxCommands[0];
-        printLinux2 = LinuxCommands[1];
-        //value3 = LinuxCommands[2];
-        //value4 = LinuxCommands[3];
-        //value5 = LinuxCommands[4];
-        //value6 = LinuxCommands[5];
-        //value7 = LinuxCommands[6];
-        //value8 = LinuxCommands[7];
-        //value9 = LinuxCommands[8];
-        //value10 = LinuxCommands[9];
-        //value11 = LinuxCommands[10];
+//        v_ref = LinuxCommands[0];
+//        turn_command = LinuxCommands[1];
+        ref_right_wall = LinuxCommands[2];
+        left_turn_Start_threshold = LinuxCommands[3];
+        left_turn_Stop_threshold = LinuxCommands[4];
+        Kp_right_wall = LinuxCommands[5];
+        Kp_front_wall = LinuxCommands[6];
+        front_turn_velocity = LinuxCommands[7];
+        forward_velocity = LinuxCommands[8];
+        turn_command_saturation = LinuxCommands[9];
+        right_wall_far = 1.5 * ref_right_wall;
+        right_turn_threshold = LinuxCommands[10];
     }
 
 
@@ -948,6 +1024,14 @@ __interrupt void SWI2_MiddlePriority(void)     // RAM_CORRECTABLE_ERROR
                 LADARfront = ladar_data[LADARi].distance_ping;
             }
         }
+        // sjew: track right back ladar
+        LADARrightback = 19;
+        for (LADARi = 11; LADARi <= 15 ; LADARi++) {
+            if (ladar_data[LADARi].distance_ping < LADARrightback) {
+                LADARrightback = ladar_data[LADARi].distance_ping;
+            }
+        }
+
         LADARxoffset = ROBOTps.x + (LADARps.x*cosf(ROBOTps.theta)-LADARps.y*sinf(ROBOTps.theta - PI/2.0));
         LADARyoffset = ROBOTps.y + (LADARps.x*sinf(ROBOTps.theta)-LADARps.y*cosf(ROBOTps.theta - PI/2.0));
         for (LADARi = 0; LADARi < 228; LADARi++) {
@@ -969,6 +1053,13 @@ __interrupt void SWI2_MiddlePriority(void)     // RAM_CORRECTABLE_ERROR
         for (LADARi = 111; LADARi <= 115 ; LADARi++) {
             if (ladar_data[LADARi].distance_pong < LADARfront) {
                 LADARfront = ladar_data[LADARi].distance_pong;
+            }
+        }
+        // ew: track right back ladar vars
+        LADARrightback = 19;
+        for (LADARi = 11; LADARi <= 15 ; LADARi++) {
+            if (ladar_data[LADARi].distance_ping < LADARrightback) {
+                LADARrightback = ladar_data[LADARi].distance_ping;
             }
         }
         LADARxoffset = ROBOTps.x + (LADARps.x*cosf(ROBOTps.theta)-LADARps.y*sinf(ROBOTps.theta - PI/2.0));
