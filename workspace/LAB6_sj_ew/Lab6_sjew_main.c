@@ -357,6 +357,7 @@ void main(void)
 
     PieVectTable.SPIB_RX_INT = &SPIB_isr;
 
+    // sjew: set up software interrupts
     PieVectTable.EMIF_ERROR_INT = &SWI1_HighestPriority;
     PieVectTable.RAM_CORRECTABLE_ERROR_INT = &SWI2_MiddlePriority;
     PieVectTable.FLASH_CORRECTABLE_ERROR_INT = &SWI3_LowestPriority;
@@ -477,6 +478,7 @@ void main(void)
     PieCtrlRegs.PIEIER12.bit.INTx9 = 1;
     PieCtrlRegs.PIEIER12.bit.INTx10 = 1;
     PieCtrlRegs.PIEIER12.bit.INTx11 = 1;
+    // sjew: enabled additional interrupts
     PieCtrlRegs.PIEIER1.bit.INTx3 = 1;
     PieCtrlRegs.PIEIER6.bit.INTx3 = 1;
 
@@ -485,6 +487,7 @@ void main(void)
     EINT;  // Enable Global interrupt INTM
     ERTM;  // Enable Global realtime interrupt DBGM
 
+    // sjew : lidar init setup
     char S_command[19] = "S1152000124000\n";//this change the baud rate to 115200
     uint16_t S_len = 19;
     serial_sendSCIC(&SerialC, S_command, S_len);
@@ -599,10 +602,6 @@ __interrupt void ADCC_ISR (void){
     if ((ADCC_count % 100) == 0) {
         UARTPrint = 1;
     }
-    //sjew: if the count is between 1000*1ms and 3000*1ms (1-3s) and the first time its reached these values
-    //      then sum the current voltage output from the DAC to take the average
-
-
 
     ADCC_count++;
 
@@ -779,7 +778,7 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
         sum_4x += adcc3result_volts;
         sum_z += adcc5result_volts;
         sum_4z += adcc4result_volts;
-        sum_gyroz = gyro_z;
+        sum_gyroz += gyro_z;
     } else if(timecount == 3000 && zeroing_flag == 0) {
         // sjew: after the first three seconds, take the average of all the offsets and set the count flag to 1 ( completed )
         zeroing_flag = 1;
@@ -845,9 +844,10 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
         v_ref = forward_velocity;
         break;
     case 3:
+        // sjew: turn right state
         turn_command = -Kp_front_wall*(14.5 - LADARfront);
         v_ref = front_turn_velocity;
-        if (LADARrightfront < right_turn_threshold) {
+        if (LADARrightfront < right_turn_threshold) { // sjew: keep going until threshold reached
             right_wall_follow_state = 2;
         }
         break;
@@ -855,12 +855,11 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
         break;
     }
 
+    // sjew: saturation
     if(turn_command > turn_command_saturation)
         turn_command = turn_command_saturation;
     if(turn_command < -turn_command_saturation)
         turn_command = -turn_command_saturation;
-
-
 
 
     // sjew: control output
@@ -869,10 +868,6 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
         u_right = curr_knob_enc;
     } else {
         // sjew: error, accumulation, and velocity values
-//        v_ref = 1.0;
-//        turn_command = -curr_knob_enc / 20.0;
-//        turn_command = 0.0;
-//        v_ref = curr_knob_enc / 20.0;
         e_steer = v_right - v_left + turn_command;
         e_left = v_ref - v_left + kp_turn * e_steer;
         e_right = v_ref - v_right - kp_turn * e_steer;
