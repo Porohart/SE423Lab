@@ -9,7 +9,7 @@ import numpy as np
 
 from matplotlib.widgets import CheckButtons, TextBox, Button
 
-HOST = '127.0.0.1'
+HOST = '192.168.1.73'
 PORT = 10001
 
 SIZE_OF_RECT = 20
@@ -84,7 +84,7 @@ def fetch_and_update(frame, socket_client, ax, input_text_boxes, figDraw, lineOb
                         x = int(x)
                         y = int(y)
 
-                        angle = floats[2]
+                        angle = floats[3]
                         
                         x_min = x - SIZE_OF_RECT
                         y_min = y - SIZE_OF_RECT
@@ -93,7 +93,7 @@ def fetch_and_update(frame, socket_client, ax, input_text_boxes, figDraw, lineOb
                         height = SIZE_OF_RECT * 2
                         
                         rect = patches.Rectangle(
-                            (x_min, y_min), width, height, angle=np.rad2deg(angle),
+                            (x_min, y_min), width, height, angle=np.rad2deg(-angle),
                             linewidth=1, edgecolor='black', facecolor='cyan', alpha=0.6
                         )
                         

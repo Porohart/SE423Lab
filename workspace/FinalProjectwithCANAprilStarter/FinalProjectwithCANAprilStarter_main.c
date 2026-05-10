@@ -60,6 +60,9 @@ int16_t EPwm1A_F28027 = 1500;
 void setF28027EPWM2A(float controleffort);
 int16_t EPwm2A_F28027 = 1500;
 
+// sjew: centroid to dist fn
+float centroid_to_dist(float centroid_row);
+
 // ----- code for CAN start here -----
 // volatile uint32_t txMsgCount = 0;
 // extern uint16_t txMsgData[4];
@@ -170,7 +173,7 @@ int16_t RobotState = 1;
 int16_t checkfronttally = 0;
 int32_t WallFollowtime = 0;
 
-#define NUMWAYPOINTS 8
+#define NUMWAYPOINTS 10
 uint16_t statePos = 0;
 pose robotdest[NUMWAYPOINTS];  // array of waypoints for the robot
 uint16_t i = 0;//for loop
@@ -275,6 +278,20 @@ int16_t DAN28027Garbage = 0;
 int16_t dan28027adc1 = 0;
 int16_t dan28027adc2 = 0;
 uint16_t MPU9250ignoreCNT = 0;  //This is ignoring the first few interrupts if ADCC_ISR and start sending to IMU after these first few interrupts.
+
+// global vars:
+float RCangle = 0.0;
+// sjew global vars:
+float max_centroid_dist_1 = 0.0;
+float max_centroid_dist_2 = 0.0;
+float second_centroid_dist_1 = 0.0;
+float second_centroid_dist_2 = 0.0;
+float third_centroid_dist_1 = 0.0;
+float third_centroid_dist_2 = 0.0;
+float center_col_const = 80;
+float Kp_turn_ball = -0.05;
+float detect_area = 5;
+int state_cnt = 2000;
 
 void main(void)
 {
@@ -466,6 +483,8 @@ void main(void)
     robotdest[5].x = 4;     robotdest[5].y = 2;
     robotdest[6].x = 4;     robotdest[6].y = 10;
     robotdest[7].x = 0;     robotdest[7].y = 9;
+    robotdest[8].x = 4;     robotdest[8].y = 4;
+    robotdest[9].x = -4;    robotdest[9].y = 4;
 
     // ROBOTps will be updated by Optitrack during gyro calibration
     // TODO: specify the starting position of the robot
@@ -590,11 +609,9 @@ void main(void)
     while(1)
     {
         if (UARTPrint == 1 ) {
-
             if (readbuttons() == 0) {
-                UART_printfLine(1,"Vrf:%.2f trn:%.2f",vref,turn);				
-//                UART_printfLine(1,"x:%.2f:y:%.2f:a%.2f",ROBOTps.x,ROBOTps.y,ROBOTps.theta);
-                UART_printfLine(2,"F%.4f R%.4f",LADARfront,LADARrightfront);
+                UART_printfLine(1,"State: %d, cnt: %d", RobotState, state_cnt);
+                UART_printfLine(2,"1: %.2f 2: %.2f",max_centroid_dist_1, second_centroid_dist_2);
             } else if (readbuttons() == 1) {
                 UART_printfLine(1,"O1A:%.0fC:%.0fR:%.0f",MaxAreaThreshold1,MaxColThreshold1,MaxRowThreshold1);
                 UART_printfLine(2,"P1A:%.0fC:%.0fR:%.0f",MaxAreaThreshold2,MaxColThreshold2,MaxRowThreshold2);
@@ -735,7 +752,7 @@ __interrupt void cpu_timer2_isr(void)
 {
     // Blink LaunchPad Blue LED
     //GpioDataRegs.GPATOGGLE.bit.GPIO31 = 1;
-
+    PostSWI3();
     CpuTimer2.InterruptCount++;
 
     //  if ((CpuTimer2.InterruptCount % 10) == 0) {
@@ -793,6 +810,29 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
     gyrox  = (((float)(IMU_data[3]))*250.0/32767.0);
     gyroy  = (((float)(IMU_data[4]))*250.0/32767.0);
     gyroz  = (((float)(IMU_data[5]))*250.0/32767.0);
+
+    // g3: calculating distance to centroids, if theres no centroid the distance should be negative or something right?
+    if(MaxColThreshold1 != 0 || MaxRowThreshold1 != 0) {
+        max_centroid_dist_1 = centroid_to_dist(MaxRowThreshold1); // g3: solve eq here
+    }
+    if(NextLargestColThreshold1 != 0 || NextLargestRowThreshold1 != 0) {
+        second_centroid_dist_1 = centroid_to_dist(NextLargestRowThreshold1); // g3: solve eq here
+    }
+    if(NextNextLargestColThreshold1 != 0 || NextNextLargestRowThreshold1 != 0) {
+        third_centroid_dist_1 = centroid_to_dist(NextNextLargestRowThreshold1); // g3: solve eq here
+    }
+
+    if(MaxColThreshold2 != 0 || MaxRowThreshold2 != 0) {
+        max_centroid_dist_2 = centroid_to_dist(MaxRowThreshold2); // g3: solve eq here
+    }
+    if(NextLargestColThreshold2 != 0 || NextLargestRowThreshold2 != 0) {
+        second_centroid_dist_2 = centroid_to_dist(NextLargestRowThreshold2); // g3: solve eq here
+    }
+    if(NextNextLargestColThreshold2 != 0 || NextNextLargestRowThreshold2 != 0) {
+        third_centroid_dist_2 = centroid_to_dist(NextNextLargestRowThreshold2); // g3: solve eq here
+    }
+
+
 
     if(calibration_state == 0){
         calibration_count++;
@@ -1006,9 +1046,8 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
         // state machine
         switch (RobotState) {
         case 1:
-
             // vref and turn are the vref and turn returned from xy_control
-
+            state_cnt++; //g3 iterate counter
             if (LADARfront < 1.2) {
                 vref = 0.2;
                 checkfronttally++;
@@ -1019,6 +1058,21 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
                 }
             } else {
                 checkfronttally = 0;
+            }
+            // g3: if its been 2 seconds since the last grab and the detected value is greater than the min area, track the ball
+            if(MaxAreaThreshold1 >= detect_area && state_cnt >= 2000) {
+                // g3: whichever ball's max area is larger, track that one
+                if(MaxAreaThreshold1 >= MaxAreaThreshold2 ) {
+                    RobotState = 20;
+                    state_cnt = 0;
+                } else {
+                    RobotState = 30;
+                    state_cnt = 0;
+                }
+            // g3: if the code enters this and the not the first one, the second ball is larger than the first and is a valid target
+            } else if(MaxAreaThreshold2 >= detect_area && state_cnt >= 2000) {
+                RobotState = 30;
+                state_cnt = 0;
             }
 
             break;
@@ -1054,6 +1108,107 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
 
         case 20:
             // put vision code here
+            // g3: if there is no column detected or the area is too small, dont move and start the timeout counter
+            if(MaxColThreshold1 == 0 || MaxAreaThreshold1 < 3) {
+                vref = 0;
+                turn = 0;
+                state_cnt++;
+            } else {
+                // turn based on p error, always a constant forward vel (reset the timeout cnt)
+                float turn_error = center_col_const - MaxColThreshold1;
+                turn = Kp_turn_ball * turn_error;
+                vref = 0.75;
+                state_cnt = 0;
+            }
+            // g3: if the ball is close enough then go to grabbing state
+            if(MaxRowThreshold1 > 100) {
+                RobotState = 22;
+                state_cnt = 0;
+            }
+            // if timeout then go back to state 1
+            if(state_cnt > 5000) {
+                RobotState = 1;
+                state_cnt = 0;
+            }
+            break;
+        case 22:
+            // g3: don't move
+            state_cnt++;
+            vref = 0.0;
+            turn = 0;
+            // g3: after 1 second, enter state 23
+            if(state_cnt >= 1000) {
+                RobotState = 24;
+                state_cnt = 0;
+            }
+            break;
+        case 24:
+            // g3: move forward 1s
+            state_cnt++;
+            vref = 0.5;
+            turn = 0;
+            if (state_cnt >= 1500) {
+                RobotState = 26;
+                state_cnt = 0;
+            }
+            break;
+        case 26:
+            // g3: wait 1s
+            state_cnt++;
+            vref = 0.0;
+            turn = 0;
+            if (state_cnt >= 1000) {
+                RobotState = 1;
+                state_cnt = 0;
+            }
+            break;
+        // g3: states 30-36 have same functionality as states 20-26, just using threshold 2
+        case 30:
+            // put vision code here
+            if(MaxColThreshold2 == 0 || MaxAreaThreshold2 < 3) {
+                vref = 0;
+                turn = 0;
+                state_cnt++;
+            } else {
+                float turn_error = center_col_const - MaxColThreshold2;
+                turn = Kp_turn_ball * turn_error;
+                vref = 0.75;
+            }
+            if(MaxRowThreshold2 > 100) {
+                RobotState = 32;
+                state_cnt = 0;
+            }
+            if(state_cnt > 5000) {
+                RobotState = 1;
+                state_cnt = 0;
+            }
+            break;
+        case 32:
+            state_cnt++;
+            vref = 0.0;
+            turn = 0;
+            if(state_cnt >= 1000) {
+                RobotState = 34;
+                state_cnt = 0;
+            }
+            break;
+        case 34:
+            state_cnt++;
+            vref = 0.5;
+            turn = 0;
+            if (state_cnt >= 1500) {
+                RobotState = 36;
+                state_cnt = 0;
+            }
+            break;
+        case 36:
+            state_cnt++;
+            vref = 0.0;
+            turn = 0;
+            if (state_cnt >= 1000) {
+                RobotState = 1;
+                state_cnt = 0;
+            }
             break;
         default:
             break;
@@ -1215,7 +1370,16 @@ __interrupt void SWI3_LowestPriority(void)     // FLASH_CORRECTABLE_ERROR
 
     //###############################################################################################
     // Insert SWI ISR Code here.......
-
+    RCangle = readEncWheel();
+    if(RCangle < -90)
+        RCangle = -90;
+    if(RCangle > 90)
+        RCangle = 90;
+    setEPWM3A_RCServo(RCangle); //RCangle is a value from -90 to 90
+    setEPWM3B_RCServo(RCangle); //RCangle is a value from -90 to 90
+    setEPWM5A_RCServo(RCangle); //RCangle is a value from -90 to 90
+    setEPWM5B_RCServo(RCangle); //RCangle is a value from -90 to 90
+    setEPWM6A_RCServo(RCangle); //RCangle is a value from -90 to 90
     //###############################################################################################
     //
     // Restore registers saved:
@@ -1413,3 +1577,10 @@ __interrupt void can_isr(void)
     InterruptclearACKGroup(INTERRUPT_ACK_GROUP9);
 }
 // ----- code for CAN end here -----
+
+// g3: calculate the actual distance from robot given centroid row
+float centroid_to_dist(float centroid_row) {
+    float cubic = centroid_row * centroid_row * centroid_row;
+    float square = centroid_row * centroid_row;
+    return 0.0008809 * square - 0.1873*centroid_row + 11.22;
+}
